@@ -230,7 +230,7 @@
     <div class="field">
       <label>Attach a file (optional)</label>
       <div class="file-drop" id="fileDrop">
-        <div class="fd-label">Click to choose a file, or drag one here — video, image, PDF, doc, anything</div>
+        <div class="fd-label">Click to choose a file, or drag one here — images, PDFs, docs (under 700KB). For videos or big files, use the link field below instead.</div>
         <div class="fd-name" id="fdName"></div>
       </div>
       <input type="file" id="actFile" style="display:none;">
@@ -254,9 +254,6 @@
   import {
     getFirestore, doc, getDoc, setDoc
   } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-  import {
-    getStorage, ref, uploadBytesResumable, getDownloadURL
-  } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-storage.js";
 
   const firebaseConfig = {
     apiKey: "AIzaSyAjR-9VR2OJTpDjlhJ5-tr7pULkw6zLKjU",
@@ -271,7 +268,6 @@
 
   const app = initializeApp(firebaseConfig);
   const db = getFirestore(app);
-  const storage = getStorage(app);
   const configDocRef = doc(db, "site", "config");   // holds { passcode }
   const boardDocRef  = doc(db, "site", "board");    // holds { activities: [...] }
 
@@ -309,9 +305,21 @@
   passInput.addEventListener('keydown', e => { if(e.key === 'Enter') submitModal(); });
 
   // ---- File picker / drag & drop ----
+  const MAX_FILE_BYTES = 700 * 1024; // ~700KB, safe margin under Firestore's 1MB field limit
+
   fileDrop.addEventListener('click', () => actFile.click());
   actFile.addEventListener('change', () => {
-    selectedFile = actFile.files[0] || null;
+    const f = actFile.files[0] || null;
+    if(f && f.size > MAX_FILE_BYTES){
+      formError.textContent = `That file is too big (${(f.size/1024/1024).toFixed(1)}MB). Please use a file under 700KB, or paste a link instead below.`;
+      formError.style.display = 'block';
+      actFile.value = '';
+      selectedFile = null;
+      updateFileLabel();
+      return;
+    }
+    formError.style.display = 'none';
+    selectedFile = f;
     updateFileLabel();
   });
   ['dragover','dragenter'].forEach(evt => {
@@ -324,6 +332,12 @@
     e.preventDefault();
     const f = e.dataTransfer.files && e.dataTransfer.files[0];
     if(f){
+      if(f.size > MAX_FILE_BYTES){
+        formError.textContent = `That file is too big (${(f.size/1024/1024).toFixed(1)}MB). Please use a file under 700KB, or paste a link instead below.`;
+        formError.style.display = 'block';
+        return;
+      }
+      formError.style.display = 'none';
       selectedFile = f;
       actFile.files = e.dataTransfer.files;
       updateFileLabel();
@@ -469,22 +483,15 @@
 
   function uploadFile(file){
     return new Promise((resolve, reject) => {
-      const path = `activities/${Date.now()}-${file.name}`;
-      const storageRef = ref(storage, path);
-      const task = uploadBytesResumable(storageRef, file);
       uploadProgress.style.display = 'block';
-      uploadBar.style.width = '0%';
-      task.on('state_changed',
-        (snap) => {
-          const pct = Math.round((snap.bytesTransferred / snap.totalBytes) * 100);
-          uploadBar.style.width = pct + '%';
-        },
-        (err) => reject(err),
-        async () => {
-          const url = await getDownloadURL(task.snapshot.ref);
-          resolve({ url, name: file.name, type: file.type || '' });
-        }
-      );
+      uploadBar.style.width = '30%';
+      const reader = new FileReader();
+      reader.onload = () => {
+        uploadBar.style.width = '100%';
+        resolve({ url: reader.result, name: file.name, type: file.type || '' });
+      };
+      reader.onerror = () => reject(new Error('Could not read file'));
+      reader.readAsDataURL(file); // produces a base64 data URL, stored directly — no separate storage service needed
     });
   }
 
